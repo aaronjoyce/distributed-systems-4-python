@@ -31,7 +31,7 @@ def file_upload():
     if not db.files.find({"name": filename, "directory": directory['reference']}):
         file = File.create(filename, directory['name'], directory['reference'])
 
-    with open(file["name"], "wb") as fo:
+    with open(file["reference"], "wb") as fo:
         fo.write(data)
 
     return jsonify({'success':True})
