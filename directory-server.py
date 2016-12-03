@@ -2,9 +2,12 @@ import base64
 import md5
 import datetime
 import json
+import hashlib
+import flask
 from flask import Flask
 from flask import request
 from flask import jsonify
+from flask import Response
 from flask.ext.pymongo import PyMongo
 
 application = Flask(__name__)
@@ -20,17 +23,18 @@ def file_upload():
     headers = request.headers
     filename = headers['filename']
     directory_name = headers['directory']
-    auth_info = headers['auth_info']
 
-    db = mongo.db.server
-    directory = None
-    if not db.directories.find({"name": directory_name, "reference": md5(directory_name).hexdigest()}):
+    m = hashlib.md5()
+    m.update(directory_name)
+    if not mongo.db.server.directories.find_one({"name": directory_name, "reference": m.hexdigest()}):
         directory = Directory.create(directory_name)
+    else:
+        directory = mongo.db.server.directories.find_one({"name": directory_name, "reference": m.hexdigest()})
 
-    file = None
-    if not db.files.find({"name": filename, "directory": directory['reference']}):
+    if not mongo.db.server.files.find_one({"name": filename, "directory": directory['reference']}):
         file = File.create(filename, directory['name'], directory['reference'])
-
+    else:
+        file = mongo.db.server.files.find_one({"name": filename, "directory": directory['reference']})
     with open(file["reference"], "wb") as fo:
         fo.write(data)
 
@@ -39,7 +43,7 @@ def file_upload():
 
 @application.route('/server/file/download', methods=['POST'])
 def file_download():
-    pass
+    return flask.make_response("great")
 
 
 
@@ -50,10 +54,13 @@ class File:
     @staticmethod
     def create(name, directory_name, directory_reference):
         db = mongo.db.server
-        file = db.files.insert({"name":name,
+        m = hashlib.md5()
+        m.update(directory_reference + "/" + directory_name)
+        file_id = db.files.insert({"name":name,
                                 "directory":directory_reference,
-                                "reference": md5(directory_reference + "/" + directory_name).hexdigest(),
+                                "reference": m.hexdigest(),
                                 "updated_at": datetime.datetime.utcnow()})
+        file = db.files.find(file_id)
         return file
 
 class Directory:
@@ -63,7 +70,11 @@ class Directory:
     @staticmethod
     def create(name):
         db = mongo.db.server
-        db.directories.insert({"name":name, "reference": md5(name).hexdigest()})
+        m = hashlib.md5()
+        m.update(name)
+        db.directories.insert({"name":name, "reference": m.hexdigest()})
+        directory = db.directories.find_one({"name":name, "reference": m.hexdigest()})
+        return directory
 
 
 
