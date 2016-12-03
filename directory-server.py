@@ -16,9 +16,14 @@ mongo = PyMongo(application)
 # constants
 AUTH_SERVER_STORAGE_SERVER_KEY = "d41d8cd98f00b204e9800998ecf8427e"
 
+def reset():
+    db = mongo.db.server
+    db.directories.drop()
+    db.files.drop()
 
 @application.route('/server/file/upload', methods=['POST'])
 def file_upload():
+    reset()
     data = request.get_data()
     headers = request.headers
     filename = headers['filename']
@@ -43,7 +48,10 @@ def file_upload():
 
 @application.route('/server/file/download', methods=['POST'])
 def file_download():
-    return flask.make_response("great")
+    reset()
+    data = request.get_json(force=True)
+    ticket = data.get('auth_token')
+    return flask.send_file("672058a02be07e598490957388e83bec")
 
 
 
@@ -56,11 +64,11 @@ class File:
         db = mongo.db.server
         m = hashlib.md5()
         m.update(directory_reference + "/" + directory_name)
-        file_id = db.files.insert({"name":name,
+        db.files.insert({"name":name,
                                 "directory":directory_reference,
                                 "reference": m.hexdigest(),
                                 "updated_at": datetime.datetime.utcnow()})
-        file = db.files.find(file_id)
+        file = db.files.find_one({"reference":m.hexdigest()})
         return file
 
 class Directory:
