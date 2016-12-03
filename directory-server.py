@@ -6,6 +6,7 @@ import hashlib
 import flask
 import os
 import threading
+import requests
 from flask import Flask
 from flask import request
 from flask import jsonify
@@ -33,6 +34,14 @@ def upload_async(file, client_request):
             port = server["port"]
             # make POST request to upload file to server, using
             # same client request
+            data = open(file['reference'], 'rb').read()
+
+            headers = {'ticket': client_request['ticket'],
+                       'directory': client_request['directory'],
+                       'filename': client_request['filename']}
+            r = requests.post("http://" + host + ":" + port + "/server/file/upload", data=data,
+                              headers=headers)
+
 
 def delete_async(file):
     with application.app_context():
