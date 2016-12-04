@@ -1,8 +1,9 @@
 import requests
 import base64
 import json
+import hashlib
 from Crypto.Cipher import AES
-
+from pymongo import MongoClient
 
 PUBLIC_KEY = "0123456789abcdef0123456789abcdef"
 client_id = "1"
@@ -43,7 +44,6 @@ encrypted_filename = base64.b64encode(cipher.encrypt(pad("sample.txt")))
 
 data = open('yourfile.txt', 'rb').read()
 
-print ticket
 headers = {'ticket':ticket, 'directory':encrypted_directory, 'filename':encrypted_filename}
 r = requests.post("http://" + server_host + ":" + server_port + "/server/file/upload", data=data, headers=headers)
 print(r.text)
