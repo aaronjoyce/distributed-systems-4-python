@@ -102,9 +102,9 @@ def file_upload():
 
     with open(file["reference"], "wb") as fo:
         fo.write(data)
-
-    thr = threading.Thread(target=upload_async, args=(file, headers), kwargs={})
-    thr.start()  # will run "foo"
+    if (get_current_server()["is_master"]):
+        thr = threading.Thread(target=upload_async, args=(file, headers), kwargs={})
+        thr.start()  # will run "foo"
     return jsonify({'success':True})
 
 
