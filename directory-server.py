@@ -202,10 +202,6 @@ class Directory:
 if __name__ == '__main__':
     with application.app_context():
         m = hashlib.md5()
-        m.update("127.0.0.1" + ":" + "8092")
-        db.servers.insert({"reference": m.hexdigest(), "host": "127.0.0.1", "port": "8092", "is_master": True, "in_use": False})
-        m.update("127.0.0.1" + ":" + "8093")
-        db.servers.insert({"reference": m.hexdigest(), "host": "127.0.0.1", "port": "8093", "is_master": False, "in_use": False})
 
         servers = db.servers.find()
         for server in servers:
