@@ -88,7 +88,9 @@ def get_current_server():
 
 @application.route('/server/file/upload', methods=['POST'])
 def file_upload():
-    data = request.get_data()
+    # Need to update cached record (if exists)
+    data = Cache.compress(request.get_data())
+
     headers = request.headers
 
     filename_encoded = headers['filename']
@@ -112,6 +114,7 @@ def file_upload():
     else:
         file = db.files.find_one({"name": filename, "directory": directory['reference'], "server": get_current_server()["reference"]})
 
+    cache.create(directory['reference'] + "_" + file['reference'], data)
     with open(file["reference"], "wb") as fo:
         fo.write(data)
     if (get_current_server()["is_master"]):
@@ -138,7 +141,11 @@ def file_download():
     if not file:
         return jsonify({"success":False})
 
-    return flask.send_file(file["reference"])
+    cache_file_reference = directory['reference'] + "_" + file['reference']
+    if cache.exists(cache_file_reference):
+        return Cache.decompress(cache.get(cache_file_reference))
+    else:
+        return flask.send_file(file["reference"])
 
 
 @application.route('/server/file/delete', methods=['POST'])
@@ -151,6 +158,8 @@ def file_delete():
     directory_name = Authentication.decode(session_key, directory_name_encoded)
     filename = Authentication.decode(session_key, filename_encoded)
 
+
+    # Also, need to invalidate Cached record (if exists)
     m = hashlib.md5()
     m.update(directory_name)
     server = get_current_server()
@@ -199,7 +208,7 @@ class Authentication:
 
 
 class Cache:
-    def __init__(self, host='127.0.0.1', port=8080, db=0):
+    def __init__(self, host='127.0.0.1', port=6379, db=0):
         self.host = host
         self.port = port
         self.db = db
@@ -218,6 +227,9 @@ class Cache:
 
     def create(self, key, data):
         self.server.set(key, data)
+
+    def exists(self, key):
+        return self.server.exists(key)
 
     @staticmethod
     def compress(data):
@@ -257,6 +269,7 @@ class Directory:
         return directory
 
 cache = Cache()
+cache.create_instance()
 
 if __name__ == '__main__':
     with application.app_context():
