@@ -7,6 +7,8 @@ import flask
 import os
 import threading
 import requests
+import redis
+import zlib
 
 from flask import Flask
 from flask import request
@@ -194,6 +196,37 @@ class Authentication:
         return decoded.strip()
 
 
+
+
+class Cache:
+    def __init__(self, host='127.0.0.1', port=8080, db=0):
+        self.host = host
+        self.port = port
+        self.db = db
+        self.pool = None
+        self.server = None
+
+    def create_instance(self):
+        self.pool = redis.ConnectionPool(host=self.host, port=self.port, db=self.db)
+        self.server = redis.Redis(connection_pool=self.pool)
+
+    def get_instance(self):
+        return self.server
+
+    def get(self, key):
+        self.server.get(key)
+
+    def create(self, key, data):
+        self.server.set(key, data)
+
+    @staticmethod
+    def compress(data):
+        return zlib.compress(data)
+
+    @staticmethod
+    def decompress(data):
+        return zlib.decompress(data)
+
 class File:
     def __init__(self):
         pass
@@ -223,6 +256,7 @@ class Directory:
         directory = db.directories.find_one({"name":name, "reference": m.hexdigest()})
         return directory
 
+cache = Cache()
 
 if __name__ == '__main__':
     with application.app_context():
