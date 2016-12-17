@@ -232,7 +232,7 @@ class DeleteTransaction(threading.Thread):
             cache.delete(self.file_reference + "_" + self.directory_reference)
             os.remove(self.file_reference)
 
-        self.lock.release
+        self.lock.release()
 
 
 
@@ -270,6 +270,17 @@ class Authentication:
         return decoded.strip()
 
 
+class SystemCache:
+    def __init__(self):
+        pass
+
+    @staticmethod
+    def compress(data):
+        return zlib.compress(data)
+
+    @staticmethod
+    def decompress(data):
+        return zlib.decompress(data)
 
 
 class Cache:
