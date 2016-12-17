@@ -177,6 +177,7 @@ def file_delete():
         return jsonify({"success": False})
 
     os.remove(file["reference"])
+    cache.delete(directory['reference'] + "_" + file['reference'])
 
     if (get_current_server()["is_master"]):
         thr = threading.Thread(target=delete_async, args=(file, headers), kwargs={})
@@ -227,6 +228,9 @@ class Cache:
 
     def create(self, key, data):
         self.server.set(key, data)
+
+    def delete(self, key):
+        self.server.delete(key)
 
     def exists(self, key):
         return self.server.exists(key)
