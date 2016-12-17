@@ -201,6 +201,7 @@ class Transaction(threading.Thread):
         if (reference):
             # then, queue the write
             write_queue.put({"file_reference":self.file_reference, "cache_reference":self.cache_reference})
+            self.lock.release()
             return
         self.lock.release()
 
