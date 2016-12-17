@@ -92,7 +92,10 @@ def get_current_server():
 @application.route('/server/file/upload', methods=['POST'])
 def file_upload():
     # Need to update cached record (if exists)
-    data = Cache.compress(request.get_data())
+    pre_write_cache_reference = uuid.uuid4()
+    print(Cache.compress(request.get_data()))
+    cache.create(pre_write_cache_reference, Cache.compress(request.get_data()))
+    print cache.get(pre_write_cache_reference)
 
     headers = request.headers
 
@@ -107,6 +110,7 @@ def file_upload():
     m.update(directory_name)
     server = get_current_server()
 
+
     if not db.directories.find_one({"name": directory_name, "reference": m.hexdigest(), "server":get_current_server()["reference"]}):
         directory = Directory.create(directory_name, server["reference"])
     else:
@@ -117,9 +121,9 @@ def file_upload():
     else:
         file = db.files.find_one({"name": filename, "directory": directory['reference'], "server": get_current_server()["reference"]})
 
-    cache.create(directory['reference'] + "_" + file['reference'], data)
-    with open(file["reference"], "wb") as fo:
-        fo.write(data)
+    transaction = Transaction(write_lock, file['reference'], directory['reference'], pre_write_cache_reference)
+    transaction.start()
+
     if (get_current_server()["is_master"]):
         thr = threading.Thread(target=upload_async, args=(file, headers), kwargs={})
         thr.start()  # will run "foo"
@@ -190,10 +194,12 @@ def file_delete():
 
 class Transaction(threading.Thread):
 
-    def __init__(self, lock, file_reference, cache_reference):
+    def __init__(self, lock, file_reference, directory_reference, cache_reference):
+        threading.Thread.__init__(self)
         self.lock = lock
         self.file_reference = file_reference
         self.cache_reference = cache_reference
+        self.directory_reference = directory_reference
 
     def run(self):
         self.lock.acquire()
@@ -204,13 +210,18 @@ class Transaction(threading.Thread):
             self.lock.release()
             return
         self.lock.release()
-
         # now, write to the file on disk and Redis cache
+        cache.create(self.directory_reference + "_" + self.file_reference, cache.get(self.cache_reference))
+        print cache.get(self.cache_reference)
+        cache.delete(self.cache_reference)
+        with open(self.file_reference, "wb") as fo:
+            fo.write(cache.get(self.directory_reference + "_" + self.file_reference))
+
 
 class QueuedWriteHandler(threading.Thread):
 
     def __init__(self):
-        pass
+        threading.Thread.__init__(self)
 
     def run(self):
         while True:
@@ -259,7 +270,7 @@ class Cache:
         return self.server
 
     def get(self, key):
-        self.server.get(key)
+        return self.server.get(key)
 
     def create(self, key, data):
         self.server.set(key, data)
