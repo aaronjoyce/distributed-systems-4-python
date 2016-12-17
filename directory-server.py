@@ -9,6 +9,8 @@ import threading
 import requests
 import redis
 import zlib
+import uuid
+import Queue
 
 from flask import Flask
 from flask import request
@@ -20,7 +22,8 @@ from Crypto.Cipher import AES
 
 application = Flask(__name__)
 mongo = PyMongo(application)
-
+write_lock = threading.Lock()
+write_queue = Queue.Queue(maxsize=100)
 '''
 Set up global variables here
 '''
@@ -103,7 +106,7 @@ def file_upload():
     m = hashlib.md5()
     m.update(directory_name)
     server = get_current_server()
-    print(server)
+
     if not db.directories.find_one({"name": directory_name, "reference": m.hexdigest(), "server":get_current_server()["reference"]}):
         directory = Directory.create(directory_name, server["reference"])
     else:
@@ -183,6 +186,37 @@ def file_delete():
         thr = threading.Thread(target=delete_async, args=(file, headers), kwargs={})
         thr.start()  # will run "foo"
     return jsonify({'success':True})
+
+
+class Transaction(threading.Thread):
+
+    def __init__(self, lock, file_reference, cache_reference):
+        self.lock = lock
+        self.file_reference = file_reference
+        self.cache_reference = cache_reference
+
+    def run(self):
+        self.lock.acquire()
+        reference = db.writes.find_one({"file_reference":self.file_reference, "cache_reference":self.cache_reference})
+        if (reference):
+            # then, queue the write
+            write_queue.put({"file_reference":self.file_reference, "cache_reference":self.cache_reference})
+            return
+        self.lock.release()
+
+        # now, write to the file on disk and Redis cache
+
+class QueuedWriteHandler(threading.Thread):
+
+    def __init__(self):
+        pass
+
+    def run(self):
+        while True:
+            file_write = write_queue.get()
+            thread = Transaction(file_write["file_reference"], file_write["cache_reference"])
+            thread.start()
+            write_queue.task_done()
 
 
 class Authentication:
@@ -286,6 +320,8 @@ if __name__ == '__main__':
                 server['in_use'] = True
                 SERVER_PORT = server['port']
                 SERVER_HOST = server['host']
-
+                queued_write_handler = QueuedWriteHandler()
+                queued_write_handler.setDaemon(True)
+                queued_write_handler.start()
                 db.servers.update({'reference': server['reference']}, server, upsert=True)
                 application.run(host=server['host'],port=server['port'])
