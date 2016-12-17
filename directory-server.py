@@ -166,7 +166,6 @@ def file_delete():
     filename = Authentication.decode(session_key, filename_encoded)
 
 
-    # Also, need to invalidate Cached record (if exists)
     m = hashlib.md5()
     m.update(directory_name)
     server = get_current_server()
@@ -183,8 +182,11 @@ def file_delete():
         print("No file found")
         return jsonify({"success": False})
 
-    os.remove(file["reference"])
-    cache.delete(directory['reference'] + "_" + file['reference'])
+    #os.remove(file["reference"])
+    #cache.delete(directory['reference'] + "_" + file['reference'])
+    delete_transaction = DeleteTransaction(file["reference"], directory["reference"])
+    delete_transaction.start()
+
 
     if (get_current_server()["is_master"]):
         thr = threading.Thread(target=delete_async, args=(file, headers), kwargs={})
@@ -212,10 +214,26 @@ class Transaction(threading.Thread):
         self.lock.release()
         # now, write to the file on disk and Redis cache
         cache.create(self.directory_reference + "_" + self.file_reference, cache.get(self.cache_reference))
-        print cache.get(self.cache_reference)
         cache.delete(self.cache_reference)
         with open(self.file_reference, "wb") as fo:
             fo.write(cache.get(self.directory_reference + "_" + self.file_reference))
+
+class DeleteTransaction(threading.Thread):
+    def __init__(self, lock, file_reference, directory_reference):
+        threading.Thread.__init__(self)
+        self.lock = lock
+        self.file_reference = file_reference
+        self.directory_reference = directory_reference
+
+    def run(self):
+        self.lock.acquire()
+        file = db.files.find_one({"reference":self.file_reference, "directory":self.directory_reference, "server": get_current_server()["reference"]})
+        if file:
+            cache.delete(self.file_reference + "_" + self.directory_reference)
+            os.remove(self.file_reference)
+
+        self.lock.release
+
 
 
 class QueuedWriteHandler(threading.Thread):
