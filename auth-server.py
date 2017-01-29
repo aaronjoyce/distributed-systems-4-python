@@ -44,7 +44,7 @@ def client_auth():
         token = json.dumps({'session_key':client['session_key'],
                             'session_key_expires':client['session_key_expires'],
                             'server_host': "127.0.0.1",
-                            'server_port': "8093",
+                            'server_port': "8092",
                             'ticket': Authentication.encode(AUTH_SERVER_STORAGE_SERVER_KEY, client['session_key'])})
         return jsonify({'success':True, 'token':Authentication.encode(client['public_key'], token)})
     else:
@@ -116,4 +116,4 @@ class Authentication:
 
 
 if __name__ == '__main__':
-    application.run()
+    application.run(host='localhost', port=5001)

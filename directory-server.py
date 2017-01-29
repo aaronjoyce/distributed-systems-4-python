@@ -4,13 +4,17 @@ import datetime
 import json
 import hashlib
 import flask
+import sys
+import math
 import os
 import threading
 import requests
-import redis
 import zlib
 import uuid
 import Queue
+from pyfscache import *
+import os
+import shutil
 
 from flask import Flask
 from flask import request
@@ -24,11 +28,12 @@ application = Flask(__name__)
 mongo = PyMongo(application)
 write_lock = threading.Lock()
 write_queue = Queue.Queue(maxsize=100)
+
 '''
 Set up global variables here
 '''
 
-mongo_server = "127.0.0.1"
+mongo_server = "0.0.0.0"
 mongo_port = "27017"
 connect_string = "mongodb://" + mongo_server + ":" + mongo_port
 
@@ -47,9 +52,16 @@ def reset():
     db.files.drop()
 
 
-def upload_async(file, client_request):
+def upload_async(file, client_request, options):
+    cache_reference = options['cache_reference']
     with application.app_context():
         servers = db.servers.find()
+
+        server_quorum = math.ceil(servers.count() * 0.5)
+
+        server_success = 0
+        # if number of successful less than quorum, then remove...
+        transactions = {}
         for server in servers:
             host = server["host"]
             port = server["port"]
@@ -57,18 +69,40 @@ def upload_async(file, client_request):
                 continue
             # make POST request to upload file to server, using
             # same client request
-            data = open(file['reference'], 'rb').read()
-            print(client_request)
+            data = cache.get(cache_reference)
 
             headers = {'ticket': client_request['ticket'],
                        'directory': client_request['directory'],
                        'filename': client_request['filename']}
-            r = requests.post("http://" + host + ":" + port + "/server/file/upload", data=data, headers=headers)
+            response = requests.post("http://" + host + ":" + port + "/server/file/upload", data=data, headers=headers)
+            transactions[host + '-' + port] = response.json()['success']
+            if (transactions[host + '-' + port]):
+                server_success += 1
+
+        # roll back if necessary
+        if (server_success < server_quorum):
+            for transaction_key in transactions.iterkeys():
+                if (transactions[transaction_key]):
+                    host, port = transaction_key.split('-')
+                    headers = {'ticket': client_request['ticket'],
+                               'directory': client_request['directory'],
+                               'filename': client_request['filename']}
+                    r = requests.post("http://" + host + ":" + port + "/server/file/delete", data='', headers=headers)
+
+
+
+
 
 
 def delete_async(file, client_request):
     with application.app_context():
         servers = db.servers.find()
+        server_quorum = math.ceil(servers.count() * 0.5)
+
+        server_success = 0
+        # if number of successful less than quorum, then remove...
+        transactions = {}
+
         for server in servers:
             host = server["host"]
             port = server["port"]
@@ -76,13 +110,23 @@ def delete_async(file, client_request):
                 continue
             # make POST request to delete file from server, using
             # same client request
-            print(client_request)
-
             headers = {'ticket': client_request['ticket'],
                        'directory': client_request['directory'],
                        'filename': client_request['filename']}
-            r = requests.post("http://" + host + ":" + port + "/server/file/delete", data='', headers=headers)
+            response = requests.post("http://" + host + ":" + port + "/server/file/delete", data='', headers=headers)
+            transactions[host + '-' + port] = response.json()['success']
+            if (transactions[host + '-' + port]):
+                server_success += 1
 
+        # roll back if necessary
+        if (server_success < server_quorum):
+            for transaction_key in transactions.iterkeys():
+                if (transactions[transaction_key]):
+                    host, port = transaction_key.split('-')
+                    headers = {'ticket': client_request['ticket'],
+                               'directory': client_request['directory'],
+                               'filename': client_request['filename']}
+                    r = requests.post("http://" + host + ":" + port + "/server/file/upload", data='', headers=headers)
 
 def get_current_server():
     with application.app_context():
@@ -93,9 +137,7 @@ def get_current_server():
 def file_upload():
     # Need to update cached record (if exists)
     pre_write_cache_reference = uuid.uuid4()
-    print(Cache.compress(request.get_data()))
     cache.create(pre_write_cache_reference, Cache.compress(request.get_data()))
-    print cache.get(pre_write_cache_reference)
 
     headers = request.headers
 
@@ -110,7 +152,6 @@ def file_upload():
     m.update(directory_name)
     server = get_current_server()
 
-
     if not db.directories.find_one({"name": directory_name, "reference": m.hexdigest(), "server":get_current_server()["reference"]}):
         directory = Directory.create(directory_name, server["reference"])
     else:
@@ -124,9 +165,11 @@ def file_upload():
     transaction = Transaction(write_lock, file['reference'], directory['reference'], pre_write_cache_reference)
     transaction.start()
 
+    options = {}
+    options['cache_reference'] = pre_write_cache_reference
     if (get_current_server()["is_master"]):
-        thr = threading.Thread(target=upload_async, args=(file, headers), kwargs={})
-        thr.start()  # will run "foo"
+        thr = threading.Thread(target=upload_async, args=(file, headers, options), kwargs={})
+        thr.start()
     return jsonify({'success':True})
 
 
@@ -148,7 +191,7 @@ def file_download():
     if not file:
         return jsonify({"success":False})
 
-    cache_file_reference = directory['reference'] + "_" + file['reference']
+    cache_file_reference = directory['reference'] + "_" + file['reference'] + "_" + get_current_server()["reference"]
     if cache.exists(cache_file_reference):
         return Cache.decompress(cache.get(cache_file_reference))
     else:
@@ -172,19 +215,15 @@ def file_delete():
     print(server)
     # check if the directory exists on current server
     if not db.directories.find_one({"name": directory_name, "reference": m.hexdigest(), "server": get_current_server()["reference"]}):
-        print("No directory found")
         return jsonify({"success": False})
     else:
         directory = db.directories.find_one({"name": directory_name, "reference": m.hexdigest(), "server": get_current_server()["reference"]})
     # check if the file exists on current server
     file = db.files.find_one({"name": filename, "directory": directory['reference'], "server": get_current_server()["reference"]})
     if not file:
-        print("No file found")
         return jsonify({"success": False})
 
-    #os.remove(file["reference"])
-    #cache.delete(directory['reference'] + "_" + file['reference'])
-    delete_transaction = DeleteTransaction(file["reference"], directory["reference"])
+    delete_transaction = DeleteTransaction(write_lock, file["reference"], directory["reference"])
     delete_transaction.start()
 
 
@@ -212,11 +251,11 @@ class Transaction(threading.Thread):
             self.lock.release()
             return
         self.lock.release()
-        # now, write to the file on disk and Redis cache
-        cache.create(self.directory_reference + "_" + self.file_reference, cache.get(self.cache_reference))
-        cache.delete(self.cache_reference)
+
+        # now, write to the file on disk and pyfscache
+        cache.create(self.directory_reference + "_" + self.file_reference + "_" + get_current_server()["reference"], cache.get(self.cache_reference))
         with open(self.file_reference, "wb") as fo:
-            fo.write(cache.get(self.directory_reference + "_" + self.file_reference))
+            fo.write(cache.get(self.directory_reference + "_" + self.file_reference + "_" + get_current_server()["reference"]))
 
 class DeleteTransaction(threading.Thread):
     def __init__(self, lock, file_reference, directory_reference):
@@ -229,8 +268,8 @@ class DeleteTransaction(threading.Thread):
         self.lock.acquire()
         file = db.files.find_one({"reference":self.file_reference, "directory":self.directory_reference, "server": get_current_server()["reference"]})
         if file:
-            cache.delete(self.file_reference + "_" + self.directory_reference)
-            os.remove(self.file_reference)
+            cache.delete(self.file_reference + "_" + self.directory_reference + "_" + get_current_server()["reference"])
+            #os.remove(self.file_reference)
 
         self.lock.release()
 
@@ -283,7 +322,54 @@ class SystemCache:
         return zlib.decompress(data)
 
 
+class CacheSys:
+    def __init__(self, directory, retention):
+        self.directory = directory
+        self.retention = retention # expressed in days
+        self.instance = FSCache(self.directory, days=self.retention)
+
+    def get_instance(self):
+        return self.instance
+
+    def get(self, key):
+        return self.get_instance()[key]
+
+    def create(self, key, data):
+        self.get_instance()[key] = data
+
+    def delete(self, key):
+        self.get_instance().expire(key)
+
+    def exists(self, key):
+        if key in self.get_instance():
+            return True
+        else:
+            return False
+
 class Cache:
+    def __init__(self, directory, retention):
+        self.directory = directory
+        self.retention = retention # expressed in days
+        self.instance = FSCache(self.directory, days=self.retention)
+
+    def get_instance(self):
+        return self.instance
+
+    def get(self, key):
+        return self.get_instance()[key]
+
+    def create(self, key, data):
+        if self.exists(key):
+            self.delete(key)
+        self.get_instance()[key] = data
+
+    def delete(self, key):
+        if self.exists(key):
+            self.get_instance().expire(key)
+
+    def exists(self, key):
+        return key in self.get_instance()
+    """
     def __init__(self, host='127.0.0.1', port=6379, db=0):
         self.host = host
         self.port = port
@@ -309,7 +395,7 @@ class Cache:
 
     def exists(self, key):
         return self.server.exists(key)
-
+    """
     @staticmethod
     def compress(data):
         return zlib.compress(data)
@@ -334,7 +420,6 @@ class File:
         file = db.files.find_one({"reference":m.hexdigest()})
         return file
 
-
 class Directory:
     def __init__(self):
         pass
@@ -347,12 +432,15 @@ class Directory:
         directory = db.directories.find_one({"name":name, "reference": m.hexdigest()})
         return directory
 
-cache = Cache()
-cache.create_instance()
+
+cache = Cache('cache/dir', 7)
 
 if __name__ == '__main__':
+    print("This should have been included")
     with application.app_context():
         m = hashlib.md5()
+
+        print(sys.version)
 
         servers = db.servers.find()
         for server in servers:

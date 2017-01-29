@@ -10,6 +10,8 @@ PUBLIC_KEY = "0123456789abcdef0123456789abcdef"
 client_id = "1"
 decrypted_password = "0dP1jO2zS7111111"
 
+r = requests.get('http://127.0.0.1:5001/client/create')
+
 def pad(s):
     return s + b" " * (AES.block_size - len(s) % AES.block_size)
 
@@ -19,7 +21,7 @@ encrypted_password = base64.b64encode(cipher.encrypt(decrypted_password))
 
 headers = {'Content-type': 'application/json'}
 payload = {'client_id': client_id, 'encrypted_password': encrypted_password}
-r = requests.post("http://127.0.0.1:5000/client/auth", data=json.dumps(payload), headers=headers)
+r = requests.post("http://127.0.0.1:5001/client/auth", data=json.dumps(payload), headers=headers)
 response_body = r.text
 encoded_token = json.loads(response_body)["token"]
 
