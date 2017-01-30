@@ -208,7 +208,6 @@ def file_delete():
     directory_name = Authentication.decode(session_key, directory_name_encoded)
     filename = Authentication.decode(session_key, filename_encoded)
 
-
     m = hashlib.md5()
     m.update(directory_name)
     server = get_current_server()
@@ -269,7 +268,7 @@ class DeleteTransaction(threading.Thread):
         file = db.files.find_one({"reference":self.file_reference, "directory":self.directory_reference, "server": get_current_server()["reference"]})
         if file:
             cache.delete(self.file_reference + "_" + self.directory_reference + "_" + get_current_server()["reference"])
-            #os.remove(self.file_reference)
+            os.remove(self.file_reference)
 
         self.lock.release()
 
@@ -411,7 +410,7 @@ class File:
     @staticmethod
     def create(name, directory_name, directory_reference, server_reference):
         m = hashlib.md5()
-        m.update(directory_reference + "/" + directory_name)
+        m.update(directory_reference + "/" + directory_name + '-' + server_reference)
         db.files.insert({"name":name
             ,"directory": directory_reference
             ,"server": server_reference

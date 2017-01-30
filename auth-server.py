@@ -9,6 +9,7 @@ import string
 from flask import Flask
 from flask import request
 from flask import jsonify
+from Crypto.Cipher import AES
 from flask.ext.pymongo import PyMongo
 from Crypto.Cipher import AES
 
@@ -20,26 +21,53 @@ CLIENT_SERVER_KEY = "d41d8cd98f00b204e9800998ecf8427e"
 AUTH_SERVER_STORAGE_SERVER_KEY = "d41d8cd98f00b204e9800998ecf8427e"
 
 # Client Authentication
-@application.route('/client/create', methods=['GET'])
+"""
+@:param password
+@:param public_key
+@:param client_id
+"""
+@application.route('/client/create', methods=['POST'])
 def client_create():
     db = mongo.db.dist
     db.clients.drop()
+
+    data = request.get_json(force=True)
+    password = data.get('password')
+    public_key = data.get('public_key')
+    client_id = data.get('client_id')
+
+    encrypted_password = base64.b64encode(AES.new(public_key, AES.MODE_ECB).encrypt(password)) # never use ECB in strong systems, obviously
     result = db.clients.insert(
-        {"client_id": "1"
+        {"client_id": client_id
             , "session_key": "928F767EADE2DBFD62BFCD65B8E21"
             , "session_key_expires": (datetime.datetime.utcnow() + datetime.timedelta(seconds=60 * 60 * 4)).strftime(
             '%Y-%m-%d %H:%M:%S')
-            , "public_key": "0123456789abcdef0123456789abcdef"
-            , "password": "0dP1jO2zS7111111"}
+            , "public_key": public_key
+            , "password": encrypted_password}
     )
     return jsonify({})
+
+
+@application.route('/cliente/delete', methods=['DELETE'])
+def client_delete():
+    db = mongo.db.dist
+
+    data = request.get_json(force=True)
+    password = data.get('password')
+    client_id = data.get('client_id')
+
+    client = Authentication.auth(client_id, password)
+    if client:
+        db.clients.deleteMany({"client_id:":client_id})
+
 
 @application.route('/client/auth', methods=['POST'])
 def client_auth():
     data = request.get_json(force=True)
     client_id = data.get('client_id')
-    encrypted_password = data.get('encrypted_password')
-    client = Authentication.auth(client_id, encrypted_password)
+    password = data.get('password')
+
+    client = Authentication.auth(client_id, password)
     if client:
         token = json.dumps({'session_key':client['session_key'],
                             'session_key_expires':client['session_key_expires'],
@@ -64,11 +92,13 @@ class Server:
     @staticmethod
     def create(host, port):
         db = mongo.db.dist
-        result = db.servers.insert_one({"host":host, })
+        db.servers.insert_one({"host":host})
 
 
 
 class Authentication:
+    MAX_SESSION_PERIOD = 43200 # expressed in terms of seconds
+
     def __init__(self):
         pass
 
@@ -98,13 +128,19 @@ class Authentication:
 
 
     @staticmethod
-    def auth(client_id, encrypted_password):
+    def is_password_match(source_password, provided_password):
+        return source_password == provided_password
+
+    @staticmethod
+    def auth(client_id, decrypted_password):
         client = Authentication.get_client(client_id)
         client_public_key = client['public_key']
-        decoded_password = Authentication.decode(client_public_key, encrypted_password)
-        if (decoded_password == client['password']):
+        cipher = AES.new(client_public_key, AES.MODE_ECB)  # never use ECB in strong systems, obviously
+        encrypted_password = base64.b64encode(cipher.encrypt(decrypted_password))
+
+        if (Authentication.is_password_match(client['password'], encrypted_password)):
             session_key = ''.join(random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(32))
-            session_key_expires = (datetime.datetime.utcnow() + datetime.timedelta(seconds=60*250)).strftime('%Y-%m-%d %H:%M:%S')
+            session_key_expires = (datetime.datetime.utcnow() + datetime.timedelta(seconds=Authentication.MAX_SESSION_PERIOD)).strftime('%Y-%m-%d %H:%M:%S')
             client['session_key'] = session_key
             client['session_key_expires'] = session_key_expires
             if (Authentication.update_client(client_id, client) != False):
