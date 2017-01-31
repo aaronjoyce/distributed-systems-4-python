@@ -19,6 +19,9 @@ mongo = PyMongo(application)
 
 CLIENT_SERVER_KEY = "d41d8cd98f00b204e9800998ecf8427e"
 AUTH_SERVER_STORAGE_SERVER_KEY = "d41d8cd98f00b204e9800998ecf8427e"
+DATE_TIME_FORMAT = '%Y-%m-%d %H:%M:%S'
+SESSION_KEY_EXPIRATION_PERIOD = 14400 # expressed in seconds
+
 
 # Client Authentication
 """
@@ -29,7 +32,6 @@ AUTH_SERVER_STORAGE_SERVER_KEY = "d41d8cd98f00b204e9800998ecf8427e"
 @application.route('/client/create', methods=['POST'])
 def client_create():
     db = mongo.db.dist
-    db.clients.drop()
 
     data = request.get_json(force=True)
     password = data.get('password')
@@ -39,11 +41,10 @@ def client_create():
     encrypted_password = base64.b64encode(AES.new(public_key, AES.MODE_ECB).encrypt(password)) # never use ECB in strong systems, obviously
     result = db.clients.insert(
         {"client_id": client_id
+            , "session_key_expires": (datetime.datetime.utcnow() + datetime.timedelta(seconds=SESSION_KEY_EXPIRATION_PERIOD)).strftime(DATE_TIME_FORMAT)
             , "session_key": "928F767EADE2DBFD62BFCD65B8E21"
-            , "session_key_expires": (datetime.datetime.utcnow() + datetime.timedelta(seconds=60 * 60 * 4)).strftime(
-            '%Y-%m-%d %H:%M:%S')
-            , "public_key": public_key
-            , "password": encrypted_password}
+            , "password": encrypted_password
+            , "public_key": public_key}
     )
     return jsonify({})
 

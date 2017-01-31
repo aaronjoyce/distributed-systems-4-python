@@ -136,8 +136,8 @@ def get_current_server():
 @application.route('/server/file/upload', methods=['POST'])
 def file_upload():
     # Need to update cached record (if exists)
-    pre_write_cache_reference = uuid.uuid4()
-    cache.create(pre_write_cache_reference, Cache.compress(request.get_data()))
+    # pre_write_cache_reference = uuid.uuid4()
+    # cache.create(pre_write_cache_reference, Cache.compress(request.get_data()))
 
     headers = request.headers
 
@@ -147,6 +147,11 @@ def file_upload():
     session_key = Authentication.decode(AUTH_SERVER_STORAGE_SERVER_KEY, ticket).strip()
     directory_name = Authentication.decode(session_key, directory_name_encoded)
     filename = Authentication.decode(session_key, filename_encoded)
+
+    m = hashlib.md5()
+    pre_write_cache_reference = m.update(directory_name + "/" + filename)
+
+    cache.create(pre_write_cache_reference, Cache.compress(request.get_data()))
 
     m = hashlib.md5()
     m.update(directory_name)
@@ -175,11 +180,14 @@ def file_upload():
 
 @application.route('/server/file/download', methods=['POST'])
 def file_download():
-    data = request.get_json(force=True)
-    authentication = data.get('authentication')
+    headers = request.headers
 
-    filename = data.get('filename')
-    directory_name = data.get('directory')
+    filename_encoded = headers['filename']
+    directory_name_encoded = headers['directory']
+    ticket = headers['ticket']
+    session_key = Authentication.decode(AUTH_SERVER_STORAGE_SERVER_KEY, ticket).strip()
+    directory_name = Authentication.decode(session_key, directory_name_encoded)
+    filename = Authentication.decode(session_key, filename_encoded)
 
     m = hashlib.md5()
     m.update(directory_name)
@@ -190,6 +198,28 @@ def file_download():
     file = db.files.find_one({"name": filename, "directory": directory['reference'], "server": get_current_server()["reference"]})
     if not file:
         return jsonify({"success":False})
+
+    if not(get_current_server()["is_master"]):
+        cache_reference = directory["reference"] + "_" + file["reference"] + "_" + get_current_server()["reference"]
+        if (cache.get(cache_reference)):
+            return Cache.decompress(cache.get(cache_reference))
+        else:
+            return flask.send_file(file["reference"])
+
+    # otherwise, it's the master server
+    file_sources = db.files.find({"name": filename, "directory": directory['reference']})
+    for file_source in file_sources:
+        server_reference = file_source["server"];
+        if (server_reference == get_current_server()["reference"]):
+            continue
+        server = db.servers.find_one({"reference": server_reference})
+        read = requests.post("http://" + server['host'] + ":" + server['port'] + "/server/file/download", data="",
+                             headers=request.headers)
+        if (read.text):
+            resp = flask.Response(read.text)
+            resp.headers['Access-Control-Allow-Origin'] = '*'
+            resp.headers["content-type"] = "text/plain"
+            return resp
 
     cache_file_reference = directory['reference'] + "_" + file['reference'] + "_" + get_current_server()["reference"]
     if cache.exists(cache_file_reference):
@@ -368,33 +398,7 @@ class Cache:
 
     def exists(self, key):
         return key in self.get_instance()
-    """
-    def __init__(self, host='127.0.0.1', port=6379, db=0):
-        self.host = host
-        self.port = port
-        self.db = db
-        self.pool = None
-        self.server = None
 
-    def create_instance(self):
-        self.pool = redis.ConnectionPool(host=self.host, port=self.port, db=self.db)
-        self.server = redis.Redis(connection_pool=self.pool)
-
-    def get_instance(self):
-        return self.server
-
-    def get(self, key):
-        return self.server.get(key)
-
-    def create(self, key, data):
-        self.server.set(key, data)
-
-    def delete(self, key):
-        self.server.delete(key)
-
-    def exists(self, key):
-        return self.server.exists(key)
-    """
     @staticmethod
     def compress(data):
         return zlib.compress(data)
