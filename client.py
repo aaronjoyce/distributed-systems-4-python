@@ -15,6 +15,8 @@ headers = {'Content-type': 'application/json'}
 payload = {'client_id': client_id, 'password': decrypted_password, 'public_key':PUBLIC_KEY}
 r = requests.post("http://127.0.0.1:5001/client/create", data=json.dumps(payload), headers=headers)
 
+
+
 def pad(s):
     return s + b" " * (AES.block_size - len(s) % AES.block_size)
 
@@ -39,6 +41,7 @@ server_host = decoded_data["server_host"]
 server_port = decoded_data["server_port"]
 
 
+
 # UPLOADING FILE TO FILE SERVER, USING AUTHENTICATED DATA
 cipher = AES.new(session_key, AES.MODE_ECB)  # never use ECB in strong systems obviously
 encrypted_directory = base64.b64encode(cipher.encrypt(pad("/home/great")))
@@ -47,7 +50,18 @@ encrypted_filename = base64.b64encode(cipher.encrypt(pad("sample.txt")))
 data = open('yourfile.txt', 'rb').read()
 
 headers = {'ticket':ticket, 'directory':encrypted_directory, 'filename':encrypted_filename}
+write = requests.post("http://" + server_host + ":" + server_port + "/server/file/ready-to-commit", data=data, headers=headers)
+print(write.text)
+
+
+sys.exit()
+time.sleep(10)
+
+
+headers = {'ticket':ticket, 'directory':encrypted_directory, 'filename':encrypted_filename}
 write = requests.post("http://" + server_host + ":" + server_port + "/server/file/upload", data=data, headers=headers)
+
+
 time.sleep(10)
 read = requests.post("http://" + server_host + ":" + server_port + "/server/file/download", data="", headers=headers)
 print(read.text)

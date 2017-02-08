@@ -133,6 +133,73 @@ def get_current_server():
         return db.servers.find_one({"host":SERVER_HOST, "port": SERVER_PORT})
 
 
+@application.route('/server/file/ready-to-commit', methods=['POST'])
+def file_ready_to_commit():
+    headers = request.headers
+
+    filename_encoded = headers['filename']
+    directory_name_encoded = headers['directory']
+    ticket = headers['ticket']
+    session_key = Authentication.decode(AUTH_SERVER_STORAGE_SERVER_KEY, ticket).strip()
+    directory_name = Authentication.decode(session_key, directory_name_encoded)
+    filename = Authentication.decode(session_key, filename_encoded)
+
+    m = hashlib.md5()
+    m.update(get_current_server()['reference'])
+    pre_write_cache_reference = m.update(directory_name + "/" + filename)
+
+
+    cache.create(pre_write_cache_reference, Cache.compress(request.get_data()))
+    reference = str(uuid.uuid1())
+    commit = Commit.create(reference, directory_name, filename, pre_write_cache_reference)
+    return jsonify({"ready_to_commit":reference})
+
+@application.route('/server/file/commit', methods=['POST'])
+def file_commit():
+    headers = request.headers
+
+    commit_reference = request.get_data('commit_reference')
+    commit = db.commits.find_one(commit_reference)
+    if not(commit):
+        return jsonify({"success":False})
+
+    directory_name = commit["directory_name"]
+    filename = commit["file_name"]
+    cache_reference = commit["cache_reference"]
+
+    m = hashlib.md5()
+    m.update(directory_name)
+    server = get_current_server()
+
+    """
+        @reference
+        @directory_name
+        @file_name
+        @cache_reference
+    """
+    if not db.directories.find_one(
+            {"name": directory_name, "reference": m.hexdigest(), "server": get_current_server()["reference"]}):
+        directory = Directory.create(directory_name, server["reference"])
+    else:
+        directory = db.directories.find_one(
+            {"name": directory_name, "reference": m.hexdigest(), "server": get_current_server()["reference"]})
+
+    if not db.files.find_one(
+            {"name": filename, "directory": directory['reference'], "server": get_current_server()["reference"]}):
+        file = File.create(filename, directory['name'], directory['reference'], get_current_server()["reference"])
+    else:
+        file = db.files.find_one(
+            {"name": filename, "directory": directory['reference'], "server": get_current_server()["reference"]})
+
+    transaction = Transaction(write_lock, file['reference'], directory['reference'], cache_reference)
+    transaction.start()
+
+    return jsonify({"ready_to_commit"})
+
+
+
+
+
 @application.route('/server/file/upload', methods=['POST'])
 def file_upload():
     # Need to update cached record (if exists)
@@ -299,6 +366,7 @@ class DeleteTransaction(threading.Thread):
         if file:
             cache.delete(self.file_reference + "_" + self.directory_reference + "_" + get_current_server()["reference"])
             os.remove(self.file_reference)
+            db.files.remove({"reference":self.file_reference, "directory":self.directory_reference, "server": get_current_server()["reference"]})
 
         self.lock.release()
 
@@ -422,6 +490,31 @@ class File:
             ,"updated_at": datetime.datetime.utcnow()})
         file = db.files.find_one({"reference":m.hexdigest()})
         return file
+
+class Commit:
+    def __init__(self):
+        pass
+
+    """
+        @reference
+        @directory_name
+        @file_name
+        @cache_reference
+    """
+    @staticmethod
+    def create(reference, directory_name, file_name, cache_reference):
+        db.commits.insert({
+            "reference":reference,
+            "directory_name":directory_name,
+            "file_name":file_name,
+            "cache_reference":cache_reference
+        })
+        return db.commits.find_one({"reference":reference})
+
+    @staticmethod
+    def delete(reference):
+        db.commits.remove({"reference":reference})
+
 
 class Directory:
     def __init__(self):
